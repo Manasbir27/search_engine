@@ -16,40 +16,101 @@ class TimelineVisualizer:
         self.books_df = books_df
         self.movies_df = movies_df
         
+    def create_franchise_timeline(self, franchise_name):
+        """Create a timeline visualization for a movie franchise."""
+        # Filter movies by franchise name (case-insensitive partial match)
+        franchise_movies = self.movies_df[
+            self.movies_df['title'].str.contains(franchise_name, case=False, na=False)
+        ].copy()
+        
+        if franchise_movies.empty:
+            return "No movies found for this franchise."
+            
+        # Sort by release date
+        franchise_movies['parsed_date'] = pd.to_datetime(franchise_movies['release_date'])
+        franchise_movies = franchise_movies.sort_values('parsed_date')
+        
+        # Create the visualization
+        plt.figure(figsize=(15, 8))
+        
+        # Plot points for each movie
+        plt.scatter(franchise_movies['parsed_date'], 
+                   range(len(franchise_movies)), 
+                   s=100, 
+                   color='blue')
+        
+        # Add movie titles as labels
+        for idx, movie in franchise_movies.iterrows():
+            plt.annotate(
+                f"{movie['title']}\n({movie['vote_average']:.1f}/10)",
+                (movie['parsed_date'], franchise_movies.index.get_loc(idx)),
+                xytext=(10, 0), 
+                textcoords='offset points',
+                va='center'
+            )
+            
+        plt.yticks([])  # Hide y-axis ticks
+        plt.xlabel('Release Year')
+        plt.title(f'Timeline: {franchise_name} Franchise')
+        plt.grid(True, alpha=0.3)
+        
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=45)
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save and show the plot
+        plt.savefig('franchise_timeline.png')
+        plt.show()  # Add this line to display the plot
+        plt.close()
+        
+        return "Timeline has been created and saved as 'franchise_timeline.png'"
+        
     def create_author_timeline(self, author_name):
         """Create a timeline visualization for an author's books."""
+        # Create more flexible author name matching
+        author_variations = [
+            author_name.lower(),
+            author_name.upper(),
+            author_name.title(),
+            # For J.K. Rowling specifically
+            'J.K. Rowling',
+            'JK Rowling',
+            'Rowling, J.K.',
+            'Rowling, J. K.',
+            'J. K. Rowling'
+        ]
+        
+        # Filter books using any of the author name variations
+        author_books = self.books_df[
+            self.books_df['authors'].str.contains('|'.join(author_variations), 
+                                                case=False, 
+                                                na=False,
+                                                regex=True)
+        ].copy()
+        
+        if author_books.empty:
+            # Debug information
+            print(f"No books found. Available author formats in database:")
+            sample_authors = self.books_df['authors'].dropna().sample(min(5, len(self.books_df))).tolist()
+            print("\n".join(sample_authors))
+            return "No books found for this author. Please check the author name format."
+            
+        # Clean and parse dates
+        author_books['parsed_date'] = pd.to_datetime(author_books['publication_date'], errors='coerce')
+        
+        # Remove entries with invalid dates
+        author_books = author_books.dropna(subset=['parsed_date'])
+        
+        if author_books.empty:
+            return "No books found with valid publication dates for this author."
+        
+        # Sort by publication date
+        author_books = author_books.sort_values('parsed_date')
+        
+        # Rest of the visualization code remains the same
         try:
-            # Create more flexible author name matching
-            author_variations = [
-                author_name.lower(),
-                author_name.upper(),
-                author_name.title(),
-                f"{author_name.split()[-1]}, {' '.join(author_name.split()[:-1])}",  # Last, First format
-                f"{' '.join(author_name.split()[:-1])} {author_name.split()[-1]}"    # First Last format
-            ]
-            
-            # Filter books using any of the author name variations
-            author_books = self.books_df[
-                self.books_df['authors'].str.contains('|'.join(author_variations), 
-                                                    case=False, 
-                                                    na=False,
-                                                    regex=True)
-            ].copy()
-            
-            if author_books.empty:
-                return "No books found for this author. Please check the author name."
-                
-            # Clean and parse dates
-            author_books['parsed_date'] = pd.to_datetime(author_books['publication_date'], errors='coerce')
-            author_books = author_books.dropna(subset=['parsed_date'])  # Remove entries with invalid dates
-            
-            if author_books.empty:
-                return "No books found with valid publication dates for this author."
-            
-            # Sort by publication date
-            author_books = author_books.sort_values('parsed_date')
-            
-            # Create visualization
             plt.figure(figsize=(15, 10))
             
             # Create timeline plot
@@ -95,34 +156,107 @@ class TimelineVisualizer:
             
             # Calculate summary statistics
             summary_stats = {
-                'total_books': len(author_books),
-                'average_rating': author_books['average_rating'].mean(),
-                'highest_rated': author_books.loc[author_books['average_rating'].idxmax(), 'title'],
-                'most_recent': author_books.loc[author_books['parsed_date'].idxmax(), 'title'],
-                'first_published': author_books.loc[author_books['parsed_date'].idxmin(), 'title'],
-                'publication_span': f"{author_books['parsed_date'].min().year} - {author_books['parsed_date'].max().year}"
+                'Total Books': len(author_books),
+                'Average Rating': author_books['average_rating'].mean(),
+                'Highest Rated': author_books.loc[author_books['average_rating'].idxmax(), 'title'],
+                'Most Recent': author_books.loc[author_books['parsed_date'].idxmax(), 'title'],
+                'First Published': author_books.loc[author_books['parsed_date'].idxmin(), 'title'],
+                'Publication Span': f"{author_books['parsed_date'].min().year} - {author_books['parsed_date'].max().year}"
             }
             
-            # Add summary statistics to the plot
             plt.figtext(0.02, 0.02, 
-                       '\n'.join([f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}" 
-                                 for k, v in summary_stats.items()]),
-                       fontsize=8,
-                       bbox=dict(facecolor='white', edgecolor='gray', alpha=0.8))
+                    '\n'.join([f"{k}: {v:.2f}" if isinstance(v, float) else f"{k}: {v}" 
+                                for k, v in summary_stats.items()]),
+                    fontsize=8,
+                    bbox=dict(facecolor='white', edgecolor='gray', alpha=0.8))
             
             plt.tight_layout()
             plt.savefig('author_timeline.png', dpi=300, bbox_inches='tight')
+            plt.show()
             plt.close()
             
             return {
-                'message': "Author timeline has been created and saved as 'author_timeline.png'",
-                'stats': summary_stats,
-                'books': author_books[['title', 'average_rating', 'parsed_date']].to_dict('records')
+                "message": "Timeline has been created and saved as 'author_timeline.png'",
+                "stats": summary_stats,
+                "books": author_books[['title', 'average_rating', 'parsed_date']].to_dict('records')
             }
             
         except Exception as e:
             plt.close()
-            return f"Error creating author timeline: {str(e)}"
+            return f"Error creating timeline visualization: {str(e)}"
+
+    def create_genre_graph(self, media_type='movies'):
+        """Create a graph showing genre distribution over time."""
+        if media_type.lower() == 'movies':
+            # Process movie genres
+            genre_by_year = defaultdict(lambda: defaultdict(int))
+            
+            for _, movie in self.movies_df.iterrows():
+                if pd.notna(movie['release_date']) and movie['genres']:
+                    year = pd.to_datetime(movie['release_date']).year
+                    for genre in movie['genres']:
+                        if isinstance(genre, dict):
+                            genre_by_year[year][genre['name']] += 1
+                            
+            # Convert to DataFrame for plotting
+            years = sorted(genre_by_year.keys())
+            genres = set()
+            for year_data in genre_by_year.values():
+                genres.update(year_data.keys())
+            
+            data = []
+            for year in years:
+                for genre in genres:
+                    data.append({
+                        'Year': year,
+                        'Genre': genre,
+                        'Count': genre_by_year[year][genre]
+                    })
+            
+            df = pd.DataFrame(data)
+            
+        else:  # books
+            # For books, we'll need to process genres differently
+            genre_by_year = defaultdict(lambda: defaultdict(int))
+            
+            for _, book in self.books_df.iterrows():
+                if pd.notna(book['publication_date']):
+                    year = pd.to_datetime(book['publication_date']).year
+                    genre = "General"  # Replace with actual genre processing
+                    genre_by_year[year][genre] += 1
+                    
+            df = pd.DataFrame([(year, genre, count) 
+                             for year, genres in genre_by_year.items() 
+                             for genre, count in genres.items()],
+                            columns=['Year', 'Genre', 'Count'])
+        
+        # Create the visualization
+        plt.figure(figsize=(15, 8))
+        
+        # Create a line plot for each genre
+        for genre in df['Genre'].unique():
+            genre_data = df[df['Genre'] == genre]
+            plt.plot(genre_data['Year'], genre_data['Count'], 
+                    label=genre, marker='o')
+        
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.xlabel('Year')
+        plt.ylabel('Number of Titles')
+        plt.title(f'Genre Distribution Over Time ({media_type.title()})')
+        plt.grid(True, alpha=0.3)
+        
+        # Rotate x-axis labels for better readability
+        plt.xticks(rotation=45)
+        
+        # Adjust layout
+        plt.tight_layout()
+        
+        # Save and show the plot
+        plt.savefig('genre_distribution.png')
+        plt.show()  # Add this line to display the plot
+        plt.close()
+        
+        return "Genre distribution graph has been created and saved as 'genre_distribution.png'"
 
 class UserPreferences:
     def __init__(self):
