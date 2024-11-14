@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Books & Movies Search Engine</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css" rel="stylesheet">
+    <style>
+        .result-card {
+            transition: transform 0.2s ease-in-out;
+        }
+        .result-card:hover {
+            transform: translateY(-5px);
+        }
+        .loading {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-gray-800 mb-4">Books & Movies Search Engine</h1>
+            <p class="text-gray-600 max-w-2xl mx-auto">
+                Search for books and movies, explore author timelines, and get personalized recommendations.
+            </p>
+        </div>
+
+        <!-- Search Form -->
+        <div class="max-w-3xl mx-auto mb-8">
+            <form id="searchForm" class="bg-white rounded-lg shadow-md p-6">
+                <div class="flex gap-4">
+                    <input type="text" 
+                           id="searchQuery" 
+                           class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                           placeholder="Search for books, movies, authors...">
+                    <button type="submit" 
+                            class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                        Search
+                    </button>
+                </div>
+                
+                <!-- Search Examples -->
+                <div class="mt-4 text-sm text-gray-600">
+                    <p class="mb-2">Try searching for:</p>
+                    <div class="flex flex-wrap gap-2">
+                        <span class="bg-gray-200 px-3 py-1 rounded-full cursor-pointer hover:bg-gray-300">
+                            Sci-fi movies with rating above 7.5
+                        </span>
+                        <span class="bg-gray-200 px-3 py-1 rounded-full cursor-pointer hover:bg-gray-300">
+                            Books by Stephen King
+                        </span>
+                        <span class="bg-gray-200 px-3 py-1 rounded-full cursor-pointer hover:bg-gray-300">
+                            Movies released after 2020
+                        </span>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Results will be dynamically inserted here -->
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="hidden">
+            <div class="flex justify-center items-center py-12">
+                <div class="loading w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('searchForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = document.getElementById('searchQuery').value;
+            const loading = document.getElementById('loading');
+            const results = document.getElementById('results');
+
+            // Show loading
+            loading.classList.remove('hidden');
+            results.innerHTML = '';
+
+            try {
+                const response = await fetch('/search', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `query=${encodeURIComponent(query)}`
+                });
+
+                const data = await response.json();
+                
+                // Hide loading
+                loading.classList.add('hidden');
+
+                // Display results
+                if (data.results && Array.isArray(data.results)) {
+                    results.innerHTML = data.results.map(result => {
+                        if (typeof result === 'string') {
+                            return `<div class="bg-white p-6 rounded-lg shadow-md">${result}</div>`;
+                        }
+
+                        const isMovie = result.type === 'movie';
+                        return `
+                            <div class="result-card bg-white rounded-lg shadow-md overflow-hidden">
+                                <div class="p-6">
+                                    <div class="flex items-center gap-2 mb-4">
+                                        <span class="bg-${isMovie ? 'blue' : 'purple'}-100 text-${isMovie ? 'blue' : 'purple'}-800 text-sm font-semibold px-3 py-1 rounded-full">
+                                            ${isMovie ? 'Movie' : 'Book'}
+                                        </span>
+                                    </div>
+                                    <h3 class="text-xl font-bold mb-2">${result.title}</h3>
+                                    ${isMovie ? `
+                                        <p class="text-gray-600 mb-4">${result.overview || ''}</p>
+                                        <div class="grid grid-cols-2 gap-4 text-sm">
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-yellow-500">★</span>
+                                                ${result.rating}
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-gray-500">📅</span>
+                                                ${result.release_date}
+                                            </div>
+                                            ${result.budget !== 'Unknown' ? `
+                                                <div class="flex items-center gap-2">
+                                                    <span class="text-green-500">💰</span>
+                                                    ${result.budget}
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    ` : `
+                                        <p class="text-gray-600 mb-4">By ${result.author}</p>
+                                        <div class="grid grid-cols-2 gap-4 text-sm">
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-yellow-500">★</span>
+                                                ${result.rating}
+                                            </div>
+                                            <div class="flex items-center gap-2">
+                                                <span class="text-gray-500">📅</span>
+                                                ${result.publication_date}
+                                            </div>
+                                        </div>
+                                    `}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } else {
+                    results.innerHTML = `
+                        <div class="col-span-full text-center py-8 text-gray-600">
+                            No results found
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                loading.classList.add('hidden');
+                results.innerHTML = `
+                    <div class="col-span-full text-center py-8 text-red-600">
+                        An error occurred while searching. Please try again.
+                    </div>
+                `;
+            }
+        });
+
+        // Make example searches clickable
+        document.querySelectorAll('.bg-gray-200').forEach(example => {
+            example.addEventListener('click', () => {
+                document.getElementById('searchQuery').value = example.textContent.trim();
+                document.getElementById('searchForm').dispatchEvent(new Event('submit'));
+            });
+        });
+    </script>
+</body>
+</html>
