@@ -30,14 +30,25 @@ class TimelineVisualizer:
         franchise_movies['parsed_date'] = pd.to_datetime(franchise_movies['release_date'])
         franchise_movies = franchise_movies.sort_values('parsed_date')
         
-        # Create the visualization
+        # Prepare data for Plotly visualization
+        franchise_data = []
+        for _, movie in franchise_movies.iterrows():
+            franchise_data.append({
+                'title': movie['title'],
+                'release_date': movie['release_date'],
+                'rating': movie['vote_average'],
+                'type': 'movie',
+                'franchise': franchise_name
+            })
+        
+        # Create the Matplotlib visualization
         plt.figure(figsize=(15, 8))
         
         # Plot points for each movie
         plt.scatter(franchise_movies['parsed_date'], 
-                   range(len(franchise_movies)), 
-                   s=100, 
-                   color='blue')
+                range(len(franchise_movies)), 
+                s=100, 
+                color='blue')
         
         # Add movie titles as labels
         for idx, movie in franchise_movies.iterrows():
@@ -64,8 +75,8 @@ class TimelineVisualizer:
         plt.savefig('franchise_timeline.png')
         plt.show()  # Add this line to display the plot
         plt.close()
-        
-        return "Timeline has been created and saved as 'franchise_timeline.png'"
+    
+        return franchise_data
         
     def create_author_timeline(self, author_name):
         """Create a timeline visualization for an author's books."""
@@ -93,7 +104,7 @@ class TimelineVisualizer:
         if author_books.empty:
             # Debug information
             print(f"No books found. Available author formats in database:")
-            sample_authors = self.books_df['authors'].dropna().sample(min(5, len(self.books_df))).tolist()
+            sample_authors = self.books_df['authors'].dropna().sample(min(10, len(self.books_df))).tolist()
             print("\n".join(sample_authors))
             return "No books found for this author. Please check the author name format."
             
@@ -289,6 +300,7 @@ class UserPreferences:
 class SearchEngine:
     def __init__(self):
         print("Initializing search engine...")
+        self.user_preferences = UserPreferences()
         try:
             nltk.download('punkt', quiet=True)
             nltk.download('stopwords', quiet=True)
@@ -397,8 +409,15 @@ class SearchEngine:
             'rating ' + self.movies_df['vote_average'].astype(str) + ' ' +
             'duration ' + self.movies_df['runtime'].astype(str)
         )
-    def get_personalized_recommendations(self, username):
-        """Get personalized recommendations for a specific user."""
+    def get_personalized_recommendations(self, username, media_type=None):
+        """
+        Get personalized recommendations for a specific user.
+        Args:
+            username: str - The username to get recommendations for
+            media_type: str - Optional, can be 'books' or 'movies' to filter results
+        Returns:
+            List of recommended items or error message
+        """
         if username.lower() not in self.user_preferences.users:
             return f"User {username} not found. Available users: {', '.join(self.user_preferences.users.keys())}"
 
@@ -406,57 +425,97 @@ class SearchEngine:
         results = []
 
         # Movie recommendations
-        movie_matches = []
-        for _, movie in self.movies_df.iterrows():
-            movie_genres = [g['name'] for g in movie['genres'] if isinstance(g, dict)]
-            
-            # Check if movie matches user preferences
-            if (any(genre in movie_genres for genre in user_prefs['favorite_genres']) and
-                not any(genre in movie_genres for genre in user_prefs['avoid_genres']) and
-                pd.notna(movie['vote_average']) and movie['vote_average'] >= user_prefs['min_rating'] and
-                pd.notna(movie['runtime']) and movie['runtime'] in user_prefs['preferred_movie_length'] and
-                pd.notna(movie['release_date']) and 
-                int(movie['release_date'][:4]) in user_prefs['preferred_years']):
+        if media_type is None or media_type == 'movies':
+            movie_matches = []
+            for _, movie in self.movies_df.iterrows():
+                movie_genres = [g['name'] for g in movie['genres'] if isinstance(g, dict)]
                 
-                # Check for preferred themes in overview
-                theme_match = any(theme.lower() in str(movie['overview']).lower() 
+                # Skip if movie contains any genres the user wants to avoid
+                if any(genre in movie_genres for genre in user_prefs['avoid_genres']):
+                    continue
+
+                # Calculate weighted score based on multiple factors
+                score = 0
+                
+                # Genre match score (0-3 points)
+                genre_matches = sum(genre in movie_genres for genre in user_prefs['favorite_genres'])
+                score += (genre_matches * 3)
+                
+                # Rating score (0-2 points)
+                if pd.notna(movie['vote_average']):
+                    if movie['vote_average'] >= user_prefs['min_rating'] + 1:
+                        score += 2
+                    elif movie['vote_average'] >= user_prefs['min_rating']:
+                        score += 1
+                
+                # Release year preference (0-2 points)
+                if pd.notna(movie['release_date']):
+                    try:
+                        year = int(movie['release_date'][:4])
+                        if year in user_prefs['preferred_years']:
+                            score += 2
+                    except:
+                        pass
+                
+                # Movie length preference (0-1 point)
+                if pd.notna(movie['runtime']) and movie['runtime'] in user_prefs['preferred_movie_length']:
+                    score += 1
+                
+                # Theme match (0-2 points)
+                theme_matches = sum(theme.lower() in str(movie['overview']).lower() 
                                 for theme in user_prefs['themes'])
+                score += min(theme_matches, 2)  # Cap at 2 points
                 
-                if theme_match:
+                if score >= 5:
                     movie_matches.append({
                         'type': 'movie',
                         'title': movie['title'],
                         'rating': f"{movie['vote_average']:.1f}/10",
                         'release_date': movie['release_date'],
                         'genres': movie_genres,
-                        'overview': movie['overview'][:200] + "..." if len(str(movie['overview'])) > 200 else str(movie['overview'])
+                        'overview': movie['overview'][:200] + "..." if len(str(movie['overview'])) > 200 else str(movie['overview']),
+                        'score': score
                     })
 
+            movie_matches.sort(key=lambda x: (x['score'], float(x['rating'].split('/')[0])), reverse=True)
+            results.extend(movie_matches[:5])
+
         # Book recommendations
-        book_matches = []
-        for _, book in self.books_df.iterrows():
-            # Check if book matches user preferences
-            if (pd.notna(book['average_rating']) and 
-                book['average_rating'] >= (user_prefs['min_rating'] * 0.5) and  # Convert 10-point scale to 5-point
-                any(author in str(book['authors']) for author in user_prefs['favorite_authors'])):
+        if media_type is None or media_type == 'books':
+            book_matches = []
+            for _, book in self.books_df.iterrows():
+                score = 0
                 
-                book_matches.append({
-                    'type': 'book',
-                    'title': book['title'],
-                    'author': book['authors'],
-                    'rating': f"{book['average_rating']:.1f}/5",
-                    'publication_date': book['publication_date']
-                })
+                # Author match (0-3 points)
+                if any(author.lower() in str(book['authors']).lower() for author in user_prefs['favorite_authors']):
+                    score += 3
+                
+                # Genre match for books (0-2 points)
+                if any(genre.lower() in str(book.get('genres', '')).lower() for genre in user_prefs['preferred_book_genres']):
+                    score += 2
+                
+                # Rating score (0-2 points)
+                if pd.notna(book['average_rating']):
+                    normalized_rating = book['average_rating'] * 2  # Convert 5-point to 10-point scale
+                    if normalized_rating >= user_prefs['min_rating'] + 1:
+                        score += 2
+                    elif normalized_rating >= user_prefs['min_rating']:
+                        score += 1
+                
+                if score >= 2:
+                    book_matches.append({
+                        'type': 'book',
+                        'title': book['title'],
+                        'author': book['authors'],
+                        'rating': f"{book['average_rating']:.1f}/5",
+                        'publication_date': book['publication_date'],
+                        'score': score
+                    })
 
-        # Sort and combine recommendations
-        movie_matches.sort(key=lambda x: float(x['rating'].split('/')[0]), reverse=True)
-        book_matches.sort(key=lambda x: float(x['rating'].split('/')[0]), reverse=True)
+            book_matches.sort(key=lambda x: (x['score'], float(x['rating'].split('/')[0])), reverse=True)
+            results.extend(book_matches[:5])
 
-        results.extend(movie_matches[:3])  # Top 3 movie recommendations
-        results.extend(book_matches[:2])   # Top 2 book recommendations
-
-        return results
-
+        return results if results else "No recommendations found matching the criteria."
            
 
     def create_search_index(self):
@@ -514,7 +573,7 @@ class SearchEngine:
             )
 
             # Get top 5 results
-            for _, book in filtered_df.head(5).iterrows():
+            for _, book in filtered_df.head(20).iterrows():
                 if pd.notna(book['parsed_date']):  # Only include books with valid dates
                     results.append({
                         'type': 'book',
@@ -548,32 +607,46 @@ class SearchEngine:
 
         # Sort by rating descending
         matching_movies.sort(key=lambda x: float(x['rating'].split('/')[0]), reverse=True)
-        return matching_movies[:5] if matching_movies else "No movies found matching the criteria."
+        return matching_movies[:20] if matching_movies else "No movies found matching the criteria."
 
-    def search_by_hit_and_latest(self, genre):
-        """Search for hit and latest movies by genre."""
+    def search_by_hit_and_latest(self, genre=None):
+        """Search for hit and latest movies, optionally filtered by genre."""
         matching_movies = []
+        current_year = datetime.now().year
+        
         for _, movie in self.movies_df.iterrows():
-            genres = [g['name'].lower() for g in movie['genres'] if isinstance(g, dict)]
-            if genre.lower() in genres:
-                if pd.notna(movie['vote_average']) and movie['vote_average'] >= 6.5 and movie['parsed_date'].year >= 2015:
-                    matching_movies.append({
-                        'type': 'movie',
-                        'title': movie['title'],
-                        'rating': f"{movie['vote_average']:.1f}/10",
-                        'release_date': movie['parsed_date'].year,
-                        'budget': f"${movie['budget']:,.0f}" if pd.notna(movie['budget']) and movie['budget'] > 0 else 'Unknown',
-                        'overview': movie['overview'][:200] + "..." if len(str(movie['overview'])) > 200 else str(movie['overview'])
-                    })
+            meets_hit_criteria = (
+                pd.notna(movie['vote_average']) and 
+                movie['vote_average'] >= 7.0
+            )
+            
+            meets_latest_criteria = (
+                pd.notna(movie['parsed_date']) and 
+                movie['parsed_date'].year >= 2015
+            )
+            
+            if meets_hit_criteria or meets_latest_criteria:
+                # Optionally filter by genre
+                movie_genres = [g['name'].lower() for g in movie['genres'] if isinstance(g, dict)]
+                if genre and genre.lower() not in movie_genres:
+                    continue
+                
+                matching_movies.append({
+                    'type': 'movie',
+                    'title': movie['title'],
+                    'rating': f"{movie['vote_average']:.1f}/10",
+                    'release_date': movie['parsed_date'].strftime('%Y-%m-%d'),
+                    'genres': movie_genres
+                })
 
-        # Sort by release date descending
-        matching_movies.sort(key=lambda x: x['release_date'], reverse=True)
-        return matching_movies[:5] if matching_movies else "No hit or latest movies found matching the genre."
-
+        # Sort by rating
+        matching_movies.sort(key=lambda x: float(x['rating'].split('/')[0]), reverse=True)
+        return matching_movies[:20] if matching_movies else "No hit or latest movies found."
+            
     def sort_results(self, results, sort_by=None, reverse=False):
         """Generic sorting function for search results."""
         if not isinstance(results, list) or not results:
-            return results
+            return results  
             
         if sort_by == 'budget':
             return self.sort_by_budget(results, reverse)
@@ -639,9 +712,25 @@ class SearchEngine:
             'title': None,
             'similar': False,
             'genre': None,
-            'hit_and_latest': False
+            'hit_latest_type': None,
+            'hit_and_latest': False,
+            'author_query': False
         }
-
+        author_patterns = [
+            r'who (?:is|was) the author of ["\']?([^?"\']+)["\']?',
+            r'who wrote ["\']?([^?"\']+)["\']?',
+            r'who authored ["\']?([^?"\']+)["\']?'
+            r'author of ["\']?([^?"\']+)["\']?',  # Added this pattern
+            r'writer of ["\']?([^?"\']+)["\']?'
+        ]
+        for pattern in author_patterns:
+            match = re.search(pattern, query)
+            if match:
+                parsed['author_query'] = True
+                parsed['title'] = match.group(1).strip()
+                parsed['type'] = 'book'
+                parsed['attribute'] = 'author'
+                return parsed
         # Detect question type
         if any(word in query for word in ['rating', 'rated', 'score']):
             parsed['attribute'] = 'rating'
@@ -676,20 +765,42 @@ class SearchEngine:
         elif 'book' in query:
             parsed['type'] = 'book'
 
-        # Detect "hit" and "latest" keywords
-        if any(word in query for word in ['hit', 'latest']):
+            # Simplified hit and latest detection
+        if 'hit movies' in query:
             parsed['hit_and_latest'] = True
-            genre_match = re.search(r'(\w+)\s+(?:hit|latest)\s+movies?', query)
-            if genre_match:
-                parsed['genre'] = genre_match.group(1)
+            parsed['hit_latest_type'] = 'hit'
+        elif 'latest movies' in query:
+            parsed['hit_and_latest'] = True
+            parsed['hit_latest_type'] = 'latest'
 
         return parsed
 
     def search(self, query):
+        # First parse the query
+        parsed = self.parse_query(query)
+        
         # Extract sorting criteria
         sort_by, reverse = self.parse_sort_criteria(query)
         
-        # First check for date-based queries
+        # Check for personalized recommendation requests with media type
+        recommendation_patterns = [
+            r'recommend\s+(?:some\s+)?books\s+for\s+(\w+)',
+            r'recommend\s+(?:some\s+)?movies\s+for\s+(\w+)',
+            r'recommend\s+(?:some\s+)?(?:movies|books)\s+for\s+(\w+)'
+        ]
+        
+        for pattern in recommendation_patterns:
+            match = re.search(pattern, query.lower())
+            if match:
+                username = match.group(1)
+                media_type = None
+                if 'books' in query.lower():
+                    media_type = 'books'
+                elif 'movies' in query.lower():
+                    media_type = 'movies'
+                return self.get_personalized_recommendations(username, media_type)
+        
+        # Check for date-based queries
         date_results = self.search_books_by_date(query)
         if date_results:
             return self.sort_results(date_results, sort_by, reverse)
@@ -702,19 +813,14 @@ class SearchEngine:
             return self.sort_results(results, sort_by, reverse)
 
         # Check for "hit" and "latest" queries
-        hit_and_latest_match = re.search(r'(\w+)\s+(?:hit|latest)\s+movies?', query.lower())
-        if hit_and_latest_match:
-            genre = hit_and_latest_match.group(1)
-            results = self.search_by_hit_and_latest(genre)
+        if parsed['hit_and_latest']:
+            results = self.search_by_hit_and_latest(parsed['genre'])
             return self.sort_results(results, sort_by, reverse)
 
-        # Regular search
-        parsed = self.parse_query(query)
-        # Check for personalized recommendation requests
-        user_recommendation_match = re.search(r'recommend\s+(?:some\s+)?(?:movies|books)\s+for\s+(\w+)', query.lower())
-        if user_recommendation_match:
-            username = user_recommendation_match.group(1)
-            return self.get_personalized_recommendations(username)
+        # Check for author queries
+        if parsed['author_query'] and parsed['title']:
+            return self.find_book_author(parsed['title'])
+
         # Check for budget-specific queries
         budget_match = re.search(r'budget\s+(?:more|greater|higher|above|over)\s+than\s+(\d+(?:,\d+)*)', query.lower())
         if budget_match:
@@ -722,6 +828,7 @@ class SearchEngine:
             results = self.search_by_budget(min_budget)
             return self.sort_results(results, 'budget', True)
 
+        # Check for exact title matches
         if parsed['title']:
             result = self.find_exact_match(parsed['title'], parsed)
             if result:
@@ -729,7 +836,9 @@ class SearchEngine:
 
         # Regular search with TF-IDF
         results = self.perform_tfidf_search(query, parsed)
-        return self.sort_results(results, sort_by, reverse)
+        return self.sort_results(results, sort_by, reverse) if results else "No results found."
+
+    
 
     def search_by_budget(self, min_budget):
         """Search for movies with budget above specified amount."""
@@ -747,7 +856,7 @@ class SearchEngine:
 
         if parsed['type'] in [None, 'movie']:
             movie_scores = cosine_similarity(query_vector, self.tfidf_matrix_movies).flatten()
-            top_movie_indices = np.argsort(movie_scores)[::-1][:5]
+            top_movie_indices = np.argsort(movie_scores)[::-1][:20]
             
             for idx in top_movie_indices:
                 if movie_scores[idx] > 0:
@@ -756,7 +865,7 @@ class SearchEngine:
 
         if parsed['type'] in [None, 'book']:
             book_scores = cosine_similarity(query_vector, self.tfidf_matrix_books).flatten()
-            top_book_indices = np.argsort(book_scores)[::-1][:5]
+            top_book_indices = np.argsort(book_scores)[::-1][:20]
             
             for idx in top_book_indices:
                 if book_scores[idx] > 0:
@@ -787,8 +896,21 @@ class SearchEngine:
             return 'rating', True
         elif any(word in query.lower() for word in ['date', 'release', 'published']):
             return 'date', True
+        
+        # If no specific sorting is found, return default sorting by relevance
         return 'relevance', True
-
+    def find_book_author(self, title):
+        """Find the author of a specific book."""
+        # Case-insensitive partial match for the book title
+        matches = self.books_df[self.books_df['title'].str.contains(title, case=False, na=False)]
+        
+        if matches.empty:
+            return f"Sorry, couldn't find a book with the title '{title}'"
+            
+        # Get the best match (first one)
+        book = matches.iloc[0]
+        # Return just the author name along with the exact book title for clarity
+        return f"{book['authors']}"
     def find_exact_match(self, title, parsed):
         """Find exact matches for a title in either movies or books."""
         if parsed['type'] in [None, 'movie']:
@@ -815,6 +937,8 @@ class SearchEngine:
                 book = book.iloc[0]
                 if parsed['attribute'] == 'rating':
                     return f"The rating of '{book['title']}' is {book['average_rating']:.1f}/5"
+                if parsed['attribute'] == 'authors':
+                    return f"The author of '{book['title']}' is {book['authors']}"
                 elif parsed['attribute'] == 'year':
                     return f"'{book['title']}' was published in {book['publication_date']}"
                 else:
@@ -848,14 +972,16 @@ def main():
     print("\nYou can ask questions like:")
     print("- What is the rating of [movie/book title]?")
     print("- What is the budget of [movie title]?")
-    print("- When was [movie/book title] released/published?")
     print("- Movies similar to [movie title].")
+    print(" - Who wrote [name of book]")
     print("- Comedy hit and latest movies.")
     print("- Sci-fi movies with rating above 7.5.")
+    print("\nUser preference commands:")
+    print("Recommend some books for manas")
+    print("Recommend some movies for arin")
     print("\nVisualization commands:")
     print("- Show timeline for franchise [franchise name]")
     print("- Show timeline for author [author name]")
-    print("- Show genre graph for [movies/books]\n")
     
     search_engine = SearchEngine()
     visualizer = TimelineVisualizer(search_engine.books_df, search_engine.movies_df)
@@ -927,6 +1053,5 @@ def main():
                         print(result)
             else:
                 print(results)
-
 if __name__ == "__main__":
     main()
